@@ -1,6 +1,10 @@
 package lsm
 
-import "sync"
+import (
+	"fmt"
+	"os"
+	"sync"
+)
 
 type StorageEngine struct {
 	mu       sync.RWMutex
@@ -43,8 +47,54 @@ func (sc *StorageEngine) Set(key, value string) error {
 
 	sc.memTable.Set(key, value)
 	if sc.memTable.Size() > sc.config.MemTableSizeThreshold {
-		// flush the memtable to disk
+		if err := sc.flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (sc *StorageEngine) flush() error {
+	old := sc.memTable
+
+	sc.memTable = &MemTable{
+		data: make(map[string]string),
 	}
 
+	file, err := os.CreateTemp("", "lsm-sstable-*")
+	if err != nil {
+		return err
+	}
+
+	path := file.Name()
+
+	for key, value := range old.data {
+		if _, err := fmt.Fprintf(file, "%s\t%s\n", key, value); err != nil {
+			file.Close()
+			os.Remove(path)
+
+			sc.memTable = old
+			return err
+		}
+	}
+
+	if err := file.Sync(); err != nil {
+		file.Close()
+		os.Remove(path)
+
+		sc.memTable = old
+		return err
+	}
+
+	if err := file.Close(); err != nil {
+		os.Remove(path)
+
+		sc.memTable = old
+		return err
+	}
+
+	sc.sstf = append(sc.sstf, &SSTable{
+		file: path,
+	})
 	return nil
 }
