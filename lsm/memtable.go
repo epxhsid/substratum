@@ -16,3 +16,7 @@ func (m *MemTable) Get(key string) (string, bool) {
 func (m *MemTable) Delete(key string) {
 	delete(m.data, key)
 }
+
+func (m *MemTable) Size() int {
+	return len(m.data)
+}

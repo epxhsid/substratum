@@ -3,14 +3,14 @@ package lsm
 import "sync"
 
 type StorageEngine struct {
-	mu              sync.RWMutex
-	memTable        *MemTable
-	sstf            []*SSTable
-	wal             *WAL
-	config          *Config
+	mu       sync.RWMutex
+	memTable *MemTable
+	sstf     []*SSTable
+	wal      *WAL
+	config   *Config
 }
 
-func NewStorageEngine(path string) (*StorageEngine, error) {
+func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 	wal, err := Open(path)
 	if err != nil {
 		return nil, err
@@ -29,6 +29,7 @@ func NewStorageEngine(path string) (*StorageEngine, error) {
 	return &StorageEngine{
 		wal:      wal,
 		memTable: memTable,
+		config:   config,
 	}, nil
 }
 
@@ -41,7 +42,9 @@ func (sc *StorageEngine) Set(key, value string) error {
 	}
 
 	sc.memTable.Set(key, value)
-	if sc.memTable.Si
+	if sc.memTable.Size() > sc.config.MemTableSizeThreshold {
+		// flush the memtable to disk
+	}
 
 	return nil
 }
