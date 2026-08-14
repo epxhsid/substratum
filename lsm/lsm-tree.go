@@ -4,7 +4,6 @@ import "sync"
 
 type MemTable struct {
 	data map[string]string
-	size int
 }
 
 type SSTable struct {
