@@ -19,6 +19,28 @@ type StorageEngine struct {
 	maxMemTableSize uint64
 }
 
+func NewStorageEngine(path string) (*StorageEngine, error) {
+	wal, err := Open(path)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := wal.Recover()
+	if err != nil {
+		wal.Close()
+		return nil, err
+	}
+
+	memTable := &MemTable{
+		data: data,
+	}
+
+	return &StorageEngine{
+		wal:      wal,
+		memTable: memTable,
+	}, nil
+}
+
 func (sc *StorageEngine) Set(key, value string) error {
 	sc.memTable.data[key] = value
 	if sc.wal != nil {
