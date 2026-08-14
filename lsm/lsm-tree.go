@@ -2,20 +2,12 @@ package lsm
 
 import "sync"
 
-type MemTable struct {
-	data map[string]string
-}
-
-type SSTable struct {
-	file string
-}
-
 type StorageEngine struct {
 	mu              sync.RWMutex
 	memTable        *MemTable
 	sstf            []*SSTable
 	wal             *WAL
-	maxMemTableSize uint64
+	config          *Config
 }
 
 func NewStorageEngine(path string) (*StorageEngine, error) {
@@ -47,6 +39,9 @@ func (sc *StorageEngine) Set(key, value string) error {
 			return err
 		}
 	}
+
+	sc.memTable.Set(key, value)
+	if sc.memTable.Si
 
 	return nil
 }
