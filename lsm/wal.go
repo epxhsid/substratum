@@ -27,6 +27,10 @@ func (w *WAL) Set(key, value string) error {
 	return w.append(opSet, key, value)
 }
 
+func (w *WAL) Delete(key string) error {
+	return w.append(opDelete, key, "")
+}
+
 func (w *WAL) append(op byte, key, value string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
