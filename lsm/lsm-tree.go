@@ -55,13 +55,15 @@ func (sc *StorageEngine) Set(key, value string) error {
 }
 
 func (sc *StorageEngine) flush() error {
+	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
+		return err
+	}
 	old := sc.memTable
-
 	sc.memTable = &MemTable{
 		data: make(map[string]string),
 	}
 
-	file, err := os.CreateTemp("", "lsm-sstable-*")
+	file, err := os.CreateTemp(sc.config.DataDir, "lsm-sstable-*")
 	if err != nil {
 		return err
 	}
@@ -72,23 +74,20 @@ func (sc *StorageEngine) flush() error {
 		if _, err := fmt.Fprintf(file, "%s\t%s\n", key, value); err != nil {
 			file.Close()
 			os.Remove(path)
-
 			sc.memTable = old
-			return err
 		}
+		return err
 	}
 
 	if err := file.Sync(); err != nil {
 		file.Close()
 		os.Remove(path)
-
 		sc.memTable = old
 		return err
 	}
 
 	if err := file.Close(); err != nil {
 		os.Remove(path)
-
 		sc.memTable = old
 		return err
 	}
