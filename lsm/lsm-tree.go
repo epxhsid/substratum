@@ -27,6 +27,12 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 		return nil, err
 	}
 
+	sstables, err := loadSSTables(config.DataDir)
+	if err != nil {
+		wal.Close()
+		return nil, err
+	}
+
 	memTable := &MemTable{
 		data: data,
 	}
@@ -34,6 +40,7 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 	return &StorageEngine{
 		wal:      wal,
 		memTable: memTable,
+		sstf:     sstables,
 		config:   config,
 	}, nil
 }
