@@ -94,7 +94,9 @@ func (sc *StorageEngine) flush() error {
 		buf := make([]byte, 9+len(kb)+len(vb))
 
 		if entry.deleted {
-			buf[0] = 1
+			buf[0] = opDelete
+		} else {
+			buf[0] = opSet
 		}
 
 		binary.BigEndian.PutUint32(buf[1:5], uint32(len(kb)))
