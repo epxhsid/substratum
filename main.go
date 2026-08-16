@@ -11,7 +11,7 @@ import (
 
 func main() {
 	config := &lsm.Config{
-		DataDir:  "./data",
+		DataDir:               "./data",
 		MemTableSizeThreshold: 3,
 	}
 
@@ -44,20 +44,35 @@ func main() {
 			if err := db.Set(parts[1], parts[2]); err != nil {
 				fmt.Println(err)
 			}
-		}
 		case "get":
-					if len(parts) != 2 {
-						fmt.Println("usage: get <key>")
-						continue
-					}
+			if len(parts) != 2 {
+				fmt.Println("usage: get <key>")
+				continue
+			}
 
-					value, ok := db.Get(parts[1])
-					if !ok {
-						fmt.Println("(nil)")
-						continue
-					}
+			value, ok := db.Get(parts[1])
+			if !ok {
+				fmt.Println("(nil)")
+				continue
+			}
 
-					fmt.Println(value)
-}
+			fmt.Println(value)
+		case "delete":
+			if len(parts) != 2 {
+				fmt.Println("usage: delete <key>")
+				continue
+			}
+			if err := db.Delete(parts[1]); err != nil {
+				fmt.Println("error:", err)
+			}
+		case "exit":
+			return
+		default:
+			fmt.Println("unknown command:", parts[0])
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Println("error:", err)
 	}
 }
