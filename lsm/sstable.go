@@ -4,9 +4,6 @@ import (
 	"encoding/binary"
 	"io"
 	"os"
-	"path/filepath"
-	"slices"
-	"strings"
 )
 
 type SSTable struct {
@@ -61,38 +58,4 @@ func (s *SSTable) Get(key string) (*Entry, bool) {
 			return nil, false
 		}
 	}
-}
-
-func loadSSTables(dir string) ([]*SSTable, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var files []string
-
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-
-		if strings.HasPrefix(entry.Name(), "lsm-sstable-") {
-			files = append(files, entry.Name())
-		}
-	}
-
-	slices.Sort(files)
-
-	sstables := make([]*SSTable, 0, len(files))
-
-	for _, name := range files {
-		sstables = append(sstables, &SSTable{
-			file: filepath.Join(dir, name),
-		})
-	}
-
-	return sstables, nil
 }

@@ -3,7 +3,10 @@ package lsm
 import (
 	"encoding/binary"
 	"os"
+	"path/filepath"
 	"slices"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -107,6 +110,7 @@ func (sc *StorageEngine) flush() error {
 	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
 		return err
 	}
+
 	old := sc.memTable
 	sc.memTable = &MemTable{
 		data: make(map[string]*Entry),
@@ -117,9 +121,19 @@ func (sc *StorageEngine) flush() error {
 		sc.memTable = old
 		return err
 	}
+
 	path := file.Name()
 
-	for key, entry := range old.data {
+	keys := make([]string, 0, len(old.data))
+	for key := range old.data {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		entry := old.data[key]
+
 		buf := make([]byte, 9+len(key)+len(entry.value))
 
 		if entry.deleted {
@@ -131,8 +145,8 @@ func (sc *StorageEngine) flush() error {
 		binary.BigEndian.PutUint32(buf[1:5], uint32(len(key)))
 		binary.BigEndian.PutUint32(buf[5:9], uint32(len(entry.value)))
 
-		copy(buf[9:], []byte(key))
-		copy(buf[9+len(key):], []byte(entry.value))
+		copy(buf[9:], key)
+		copy(buf[9+len(key):], entry.value)
 
 		if _, err := file.Write(buf); err != nil {
 			file.Close()
@@ -159,6 +173,40 @@ func (sc *StorageEngine) flush() error {
 		file: path,
 	})
 	return nil
+}
+
+func loadSSTables(dir string) ([]*SSTable, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var files []string
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		if strings.HasPrefix(entry.Name(), "lsm-sstable-") {
+			files = append(files, entry.Name())
+		}
+	}
+
+	slices.Sort(files)
+
+	sstables := make([]*SSTable, 0, len(files))
+
+	for _, name := range files {
+		sstables = append(sstables, &SSTable{
+			file: filepath.Join(dir, name),
+		})
+	}
+
+	return sstables, nil
 }
 
 func (sc *StorageEngine) Close() error {
