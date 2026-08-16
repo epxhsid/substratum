@@ -1,127 +1,133 @@
 package lsm
 
 import (
+	"encoding/binary"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func TestWAL_AppendAndRecover(t *testing.T) {
-	dir := t.TempDir()
-	wp := filepath.Join(dir, "wal.log")
+func TestWALRecoverSetAndDelete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal")
 
-	w1, err := Open(wp)
+	wal, err := Open(path)
 	if err != nil {
-		t.Fatalf("failed to open wal: %v", err)
+		t.Fatal(err)
+	}
+	if err := wal.Set("alpha", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Set("beta", "two"); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Delete("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(); err != nil {
+		t.Fatal(err)
 	}
 
-	if err := w1.Append("k1", "v1"); err != nil {
-		t.Fatalf("failed to append: %v", err)
-	}
-
-	w2, err := Open(wp)
+	wal, err = Open(path)
 	if err != nil {
-		t.Fatalf("failed to open wal: %v", err)
+		t.Fatal(err)
 	}
+	defer wal.Close()
 
-	if err := w2.Append("k2", "v2"); err != nil {
-		t.Fatalf("failed to append: %v", err)
-	}
-
-	data, err := w2.Recover()
+	data, err := wal.Recover()
 	if err != nil {
-		t.Fatalf("failed to recover: %v", err)
-	}
-	w2.Close()
-	if len(data) != 2 {
-		t.Fatalf("expected 2 entries, got %d", len(data))
+		t.Fatal(err)
 	}
 
-	if data["k1"] != "v1" {
-		t.Fatalf("expected k1 to be v1, got %s", data["k1"])
+	if entry := data["alpha"]; entry == nil || !entry.deleted {
+		t.Fatalf("expected alpha to recover as deleted, got %#v", entry)
 	}
-	if data["k2"] != "v2" {
-		t.Fatalf("expected k2 to be v2, got %s", data["k2"])
+	if entry := data["beta"]; entry == nil || entry.deleted || entry.value != "two" {
+		t.Fatalf("expected beta to recover with value %q, got %#v", "two", entry)
 	}
 }
 
-func TestWAL_OAppendFix(t *testing.T) {
-	dir := t.TempDir()
-	wp := filepath.Join(dir, "wal.log")
+func TestWALRecoverTruncatesPartialRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal")
 
-	w1, err := Open(wp)
+	wal, err := Open(path)
 	if err != nil {
-		t.Fatalf("failed to open wal: %v", err)
+		t.Fatal(err)
 	}
-	w1.Append("first_key", "first_val")
-	w1.Close()
+	if err := wal.Set("alpha", "one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	w2, err := Open(wp)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0644)
 	if err != nil {
-		t.Fatalf("re-open failed: %v", err)
+		t.Fatal(err)
 	}
-	w2.Append("second_key", "second_val")
+	if _, err := file.Write([]byte{opSet, 0, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
 
-	data, err := w2.Recover()
+	sizeBeforeRecover, err := fileSize(path)
 	if err != nil {
-		t.Fatalf("recovery failed: %v", err)
+		t.Fatal(err)
 	}
-	w2.Close()
 
-	if data["first_key"] != "first_val" || data["second_key"] != "second_val" {
-		t.Fatalf("O_APPEND failed, data was overwritten: %+v", data)
+	wal, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := wal.Recover()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := wal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	sizeAfterRecover, err := fileSize(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sizeAfterRecover >= sizeBeforeRecover {
+		t.Fatalf("expected partial record to be truncated, before=%d after=%d", sizeBeforeRecover, sizeAfterRecover)
+	}
+	if entry := data["alpha"]; entry == nil || entry.deleted || entry.value != "one" {
+		t.Fatalf("expected complete record to recover, got %#v", entry)
 	}
 }
 
-func TestWAL_TornWriteRecovery(t *testing.T) {
-	dir := t.TempDir()
-	wp := filepath.Join(dir, "wal.log")
+func TestWALRecoverRejectsInvalidOperation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "wal")
+	record := make([]byte, 9+len("alpha"))
+	record[0] = 0xff
+	binary.BigEndian.PutUint32(record[1:5], uint32(len("alpha")))
+	copy(record[9:], "alpha")
 
-	w, err := Open(wp)
+	if err := os.WriteFile(path, record, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	wal, err := Open(path)
 	if err != nil {
-		t.Fatalf("failed to open wal: %v", err)
+		t.Fatal(err)
 	}
+	defer wal.Close()
 
-	w.Append("valid1", "data1")
-	w.Append("valid2", "data2")
-	w.Close()
+	if _, err := wal.Recover(); !errors.Is(err, os.ErrInvalid) {
+		t.Fatalf("expected os.ErrInvalid, got %v", err)
+	}
+}
 
-	f, err := os.OpenFile(wp, os.O_WRONLY|os.O_APPEND, 0644)
+func fileSize(path string) (int64, error) {
+	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("failed to open file for corrupt injection: %v", err)
+		return 0, err
 	}
-	f.Write([]byte{0x00, 0x00, 0x00, 0x04, 0x00})
-	f.Close()
-
-	w2, err := Open(wp)
-	if err != nil {
-		t.Fatalf("re-open failed: %v", err)
-	}
-
-	data, err := w2.Recover()
-	if err != nil {
-		t.Fatalf("recovery should handle torn write gracefully, got err: %v", err)
-	}
-
-	if len(data) != 2 {
-		t.Fatalf("expected 2 valid items recovered, got %d", len(data))
-	}
-
-	if data["valid1"] != "data1" || data["valid2"] != "data2" {
-		t.Errorf("recovered data corrupt: %+v", data)
-	}
-
-	if err := w2.Append("valid3", "data3"); err != nil {
-		t.Fatalf("failed to append after torn write recovery: %v", err)
-	}
-
-	da, err := w2.Recover()
-	if err != nil {
-		t.Fatalf("post-append recovery failed: %v", err)
-	}
-	w2.Close()
-
-	if len(da) != 3 {
-		t.Fatalf("expected 3 items total, got %d", len(da))
-	}
+	return info.Size(), nil
 }

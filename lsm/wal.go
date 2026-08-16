@@ -18,24 +18,34 @@ func Open(path string) (*WAL, error) {
 		return nil, err
 	}
 
-	w := &WAL{
+	return &WAL{
 		file: f,
-	}
-	return w, nil
+	}, nil
 }
 
-func (w *WAL) Append(key, value string) error {
+func (w *WAL) Set(key, value string) error {
+	return w.append(opSet, key, value)
+}
+
+func (w *WAL) Delete(key string) error {
+	return w.append(opDelete, key, "")
+}
+
+func (w *WAL) append(op byte, key, value string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	kb := []byte(key)
 	vb := []byte(value)
 
-	buf := make([]byte, 8+len(kb)+len(vb))
-	binary.BigEndian.PutUint32(buf[0:4], uint32(len(kb)))
-	binary.BigEndian.PutUint32(buf[4:8], uint32(len(vb)))
-	copy(buf[8:], kb)
-	copy(buf[8+len(kb):], vb)
+	buf := make([]byte, 9+len(kb)+len(vb))
+
+	buf[0] = op
+	binary.BigEndian.PutUint32(buf[1:5], uint32(len(kb)))
+	binary.BigEndian.PutUint32(buf[5:9], uint32(len(vb)))
+
+	copy(buf[9:], kb)
+	copy(buf[9+len(kb):], vb)
 
 	if _, err := w.file.Write(buf); err != nil {
 		return err
@@ -44,17 +54,17 @@ func (w *WAL) Append(key, value string) error {
 	return w.file.Sync()
 }
 
-func (w *WAL) Recover() (map[string]string, error) {
+func (w *WAL) Recover() (map[string]*Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	data := make(map[string]string)
+	data := make(map[string]*Entry)
 
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 
-	hbuf := make([]byte, 8)
+	hbuf := make([]byte, 9)
 	for {
 		ofst, err := w.file.Seek(0, io.SeekCurrent)
 		if err != nil {
@@ -74,8 +84,9 @@ func (w *WAL) Recover() (map[string]string, error) {
 			return nil, err
 		}
 
-		klen := binary.BigEndian.Uint32(hbuf[0:4])
-		vlen := binary.BigEndian.Uint32(hbuf[4:8])
+		op := hbuf[0]
+		klen := binary.BigEndian.Uint32(hbuf[1:5])
+		vlen := binary.BigEndian.Uint32(hbuf[5:9])
 
 		kdata := make([]byte, klen)
 		vdata := make([]byte, vlen)
@@ -87,6 +98,7 @@ func (w *WAL) Recover() (map[string]string, error) {
 				}
 				break
 			}
+			return nil, err
 		}
 
 		if _, err := io.ReadFull(w.file, vdata); err != nil {
@@ -96,9 +108,26 @@ func (w *WAL) Recover() (map[string]string, error) {
 				}
 				break
 			}
+			return nil, err
 		}
 
-		data[string(kdata)] = string(vdata)
+		key := string(kdata)
+
+		switch op {
+		case opSet:
+			data[key] = &Entry{
+				value:   string(vdata),
+				deleted: false,
+			}
+		case opDelete:
+			data[key] = &Entry{
+				value:   "",
+				deleted: true,
+			}
+
+		default:
+			return nil, os.ErrInvalid
+		}
 	}
 
 	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
