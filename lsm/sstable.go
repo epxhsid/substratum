@@ -10,17 +10,20 @@ type SSTable struct {
 	file string
 }
 
-func (s *SSTable) Get(key string) (string, bool) {
+func (s *SSTable) Get(key string) (*Entry, bool) {
 	file, err := os.Open(s.file)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	defer file.Close()
-
 	hbuf := make([]byte, 9)
+
 	for {
 		if _, err := io.ReadFull(file, hbuf); err != nil {
-			return "", false
+			if err == io.EOF {
+				break
+			}
+			return nil, false
 		}
 
 		op := hbuf[0]
@@ -31,19 +34,28 @@ func (s *SSTable) Get(key string) (string, bool) {
 		vdata := make([]byte, vlen)
 
 		if _, err := io.ReadFull(file, kdata); err != nil {
-			return "", false
+			return nil, false
 		}
 		if _, err := io.ReadFull(file, vdata); err != nil {
-			return "", false
+			return nil, false
 		}
 
 		if string(kdata) != key {
 			continue
 		}
 
-		if op == opDelete {
-			return "", false
+		switch op {
+		case opSet:
+			return &Entry{
+				value:   string(vdata),
+				deleted: false,
+			}, true
+		case opDelete:
+			return &Entry{
+				deleted: true,
+			}, true
+		default:
+			return nil, false
 		}
-		return string(vdata), true
 	}
 }
