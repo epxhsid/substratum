@@ -64,7 +64,7 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 		return nil, err
 	}
 
-	hbuf := make([]byte, 8)
+	hbuf := make([]byte, 9)
 	for {
 		ofst, err := w.file.Seek(0, io.SeekCurrent)
 		if err != nil {
