@@ -108,6 +108,7 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 				}
 				break
 			}
+			return nil, err
 		}
 
 		key := string(kdata)

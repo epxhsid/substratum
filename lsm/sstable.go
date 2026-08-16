@@ -21,7 +21,7 @@ func (s *SSTable) Get(key string) (*Entry, bool) {
 	for {
 		if _, err := io.ReadFull(file, hbuf); err != nil {
 			if err == io.EOF {
-				break
+				return nil, false
 			}
 			return nil, false
 		}
