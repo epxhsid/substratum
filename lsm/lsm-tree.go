@@ -3,6 +3,7 @@ package lsm
 import (
 	"encoding/binary"
 	"os"
+	"slices"
 	"sync"
 )
 
@@ -35,6 +36,23 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 		memTable: memTable,
 		config:   config,
 	}, nil
+}
+
+func (sc *StorageEngine) Get(key string) (string, bool) {
+	sc.mu.RLock()
+	defer sc.mu.RUnlock()
+
+	if value, ok := sc.memTable.Get(key); ok {
+		return value, true
+	}
+
+	for i, s := range slices.Backward(sc.sstf) {
+		if value, ok := s.Get(key); ok {
+			return value, true
+		}
+	}
+
+	return "", false
 }
 
 func (sc *StorageEngine) Set(key, value string) error {
