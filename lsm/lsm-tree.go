@@ -1,7 +1,7 @@
 package lsm
 
 import (
-	"fmt"
+	"encoding/binary"
 	"os"
 	"sync"
 )
@@ -38,15 +38,32 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 }
 
 func (sc *StorageEngine) Set(key, value string) error {
-	sc.memTable.data[key] = value
-	if sc.wal != nil {
-		if err := sc.wal.Append(key, value); err != nil {
-			return err
-		}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	if err := sc.wal.Set(key, value); err != nil {
+		return err
 	}
 
 	sc.memTable.Set(key, value)
-	if sc.memTable.Size() > sc.config.MemTableSizeThreshold {
+	if sc.memTable.Size() >= sc.config.MemTableSizeThreshold {
+		if err := sc.flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (sc *StorageEngine) Delete(key string) error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	if err := sc.wal.Delete(key); err != nil {
+		return err
+	}
+
+	sc.memTable.Delete(key)
+	if sc.memTable.Size() >= sc.config.MemTableSizeThreshold {
 		if err := sc.flush(); err != nil {
 			return err
 		}
@@ -60,23 +77,38 @@ func (sc *StorageEngine) flush() error {
 	}
 	old := sc.memTable
 	sc.memTable = &MemTable{
-		data: make(map[string]string),
+		data: make(map[string]*Entry),
 	}
 
 	file, err := os.CreateTemp(sc.config.DataDir, "lsm-sstable-*")
 	if err != nil {
+		sc.memTable = old
 		return err
 	}
-
 	path := file.Name()
 
-	for key, value := range old.data {
-		if _, err := fmt.Fprintf(file, "%s\t%s\n", key, value); err != nil {
+	for key, entry := range old.data {
+		kb := []byte(key)
+		vb := []byte(entry.value)
+
+		buf := make([]byte, 9+len(kb)+len(vb))
+
+		if entry.deleted {
+			buf[0] = 1
+		}
+
+		binary.BigEndian.PutUint32(buf[1:5], uint32(len(kb)))
+		binary.BigEndian.PutUint32(buf[5:9], uint32(len(vb)))
+
+		copy(buf[9:], kb)
+		copy(buf[9+len(kb):], vb)
+
+		if _, err := file.Write(buf); err != nil {
 			file.Close()
 			os.Remove(path)
 			sc.memTable = old
+			return err
 		}
-		return err
 	}
 
 	if err := file.Sync(); err != nil {
