@@ -88,10 +88,7 @@ func (sc *StorageEngine) flush() error {
 	path := file.Name()
 
 	for key, entry := range old.data {
-		kb := []byte(key)
-		vb := []byte(entry.value)
-
-		buf := make([]byte, 9+len(kb)+len(vb))
+		buf := make([]byte, 9+len(key)+len(entry.value))
 
 		if entry.deleted {
 			buf[0] = opDelete
@@ -99,11 +96,11 @@ func (sc *StorageEngine) flush() error {
 			buf[0] = opSet
 		}
 
-		binary.BigEndian.PutUint32(buf[1:5], uint32(len(kb)))
-		binary.BigEndian.PutUint32(buf[5:9], uint32(len(vb)))
+		binary.BigEndian.PutUint32(buf[1:5], uint32(len(key)))
+		binary.BigEndian.PutUint32(buf[5:9], uint32(len(entry.value)))
 
-		copy(buf[9:], kb)
-		copy(buf[9+len(kb):], vb)
+		copy(buf[9:], []byte(key))
+		copy(buf[9+len(key):], []byte(entry.value))
 
 		if _, err := file.Write(buf); err != nil {
 			file.Close()
