@@ -153,3 +153,9 @@ func (sc *StorageEngine) flush() error {
 	})
 	return nil
 }
+
+func (sc *StorageEngine) Close() error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	return sc.wal.Close()
+}

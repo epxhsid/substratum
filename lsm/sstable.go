@@ -58,6 +58,4 @@ func (s *SSTable) Get(key string) (*Entry, bool) {
 			return nil, false
 		}
 	}
-
-	return nil, false
 }
