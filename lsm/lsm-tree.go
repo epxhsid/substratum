@@ -47,9 +47,16 @@ func (sc *StorageEngine) Get(key string) (string, bool) {
 	}
 
 	for _, s := range slices.Backward(sc.sstf) {
-		if value, ok := s.Get(key); ok {
-			return value, true
+		entry, ok := s.Get(key)
+		if !ok {
+			continue
 		}
+
+		if entry.deleted {
+			return "", false
+		}
+
+		return entry.value, true
 	}
 
 	return "", false
