@@ -98,6 +98,7 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 				}
 				break
 			}
+			return nil, err
 		}
 
 		if _, err := io.ReadFull(w.file, vdata); err != nil {
