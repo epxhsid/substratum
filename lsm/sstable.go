@@ -8,6 +8,7 @@ import (
 
 type SSTable struct {
 	file string
+	si   SparseIndex
 }
 
 func (s *SSTable) Get(key string) (*Entry, bool) {
@@ -16,6 +17,15 @@ func (s *SSTable) Get(key string) (*Entry, bool) {
 		return nil, false
 	}
 	defer file.Close()
+
+	if err := s.si.load(file); err != nil {
+		return nil, false
+	}
+
+	if _, err := file.Seek(s.si.offset(key), io.SeekStart); err != nil {
+		return nil, false
+	}
+
 	hbuf := make([]byte, 9)
 
 	for {
