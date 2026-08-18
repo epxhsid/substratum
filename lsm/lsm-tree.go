@@ -114,10 +114,10 @@ func (sc *StorageEngine) flush() error {
 	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
 		return err
 	}
-
 	old := sc.memTable
 	file, err := os.CreateTemp(sc.config.DataDir, "lsm-sstable-*")
 	if err != nil {
+		sc.memTable = old
 		return err
 	}
 
@@ -181,7 +181,6 @@ func (sc *StorageEngine) flush() error {
 	sc.memTable = &MemTable{
 		data: make(map[string]*Entry),
 	}
-
 	return nil
 }
 
