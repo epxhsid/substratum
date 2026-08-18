@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"slices"
 	"sync"
 )
 
@@ -121,7 +122,6 @@ func (sc *StorageEngine) flush() error {
 		sc.memTable = old
 		return err
 	}
-
 	path := file.Name()
 
 	keys := make([]string, 0, len(old.data))
@@ -134,6 +134,7 @@ func (sc *StorageEngine) flush() error {
 	for _, key := range keys {
 		entry := old.data[key]
 
+	for key, entry := range old.data {
 		buf := make([]byte, 9+len(key)+len(entry.value))
 
 		if entry.deleted {
@@ -147,6 +148,8 @@ func (sc *StorageEngine) flush() error {
 
 		copy(buf[9:], key)
 		copy(buf[9+len(key):], entry.value)
+		copy(buf[9:], []byte(key))
+		copy(buf[9+len(key):], []byte(entry.value))
 
 		if _, err := file.Write(buf); err != nil {
 			file.Close()
