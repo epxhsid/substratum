@@ -114,12 +114,7 @@ func (sc *StorageEngine) flush() error {
 	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
 		return err
 	}
-
 	old := sc.memTable
-	sc.memTable = &MemTable{
-		data: make(map[string]*Entry),
-	}
-
 	file, err := os.CreateTemp(sc.config.DataDir, "lsm-sstable-*")
 	if err != nil {
 		sc.memTable = old
@@ -148,7 +143,6 @@ func (sc *StorageEngine) flush() error {
 
 		binary.BigEndian.PutUint32(buf[1:5], uint32(len(key)))
 		binary.BigEndian.PutUint32(buf[5:9], uint32(len(entry.value)))
-
 		copy(buf[9:], key)
 		copy(buf[9+len(key):], entry.value)
 
@@ -178,10 +172,15 @@ func (sc *StorageEngine) flush() error {
 		return err
 	}
 
-	sc.sstf = append(sc.sstf, &SSTable{
+	sstable := &SSTable{
 		filePath: path,
 		file:     f,
-	})
+	}
+	sc.sstf = append(sc.sstf, sstable)
+
+	sc.memTable = &MemTable{
+		data: make(map[string]*Entry),
+	}
 	return nil
 }
 
