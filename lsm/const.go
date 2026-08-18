@@ -8,3 +8,5 @@ const (
 const (
 	sparseIndexInterval = 16
 )
+
+const walFlushThreshold = 4096

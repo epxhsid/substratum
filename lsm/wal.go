@@ -1,6 +1,7 @@
 package lsm
 
 import (
+	"bufio"
 	"encoding/binary"
 	"io"
 	"os"
@@ -8,9 +9,12 @@ import (
 	"sync"
 )
 
+
 type WAL struct {
-	file *os.File
-	mu   sync.RWMutex
+	file     *os.File
+	buf      *bufio.Writer
+	mu       sync.RWMutex
+	bufBytes int
 }
 
 func Open(path string) (*WAL, error) {
@@ -25,6 +29,7 @@ func Open(path string) (*WAL, error) {
 
 	return &WAL{
 		file: f,
+		buf:  bufio.NewWriter(f),
 	}, nil
 }
 
@@ -44,24 +49,40 @@ func (w *WAL) append(op byte, key, value string) error {
 	vb := []byte(value)
 
 	buf := make([]byte, 9+len(kb)+len(vb))
-
 	buf[0] = op
 	binary.BigEndian.PutUint32(buf[1:5], uint32(len(kb)))
 	binary.BigEndian.PutUint32(buf[5:9], uint32(len(vb)))
-
 	copy(buf[9:], kb)
 	copy(buf[9+len(kb):], vb)
 
-	if _, err := w.file.Write(buf); err != nil {
+	n, err := w.buf.Write(buf)
+	if err != nil {
 		return err
 	}
+	w.bufBytes += n
 
-	return w.file.Sync()
+	if w.bufBytes >= walFlushThreshold {
+		if err := w.buf.Flush(); err != nil {
+			return err
+		}
+		if err := w.file.Sync(); err != nil {
+			return err
+		}
+		w.bufBytes = 0
+	}
+
+	return nil
 }
 
 func (w *WAL) Recover() (map[string]*Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+
+	if w.buf != nil {
+		if err := w.buf.Flush(); err != nil {
+			return nil, err
+		}
+	}
 
 	data := make(map[string]*Entry)
 
@@ -142,9 +163,28 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 	return data, nil
 }
 
+func (w *WAL) Flush() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.buf != nil {
+		if err := w.buf.Flush(); err != nil {
+			return err
+		}
+		if err := w.file.Sync(); err != nil {
+			return err
+		}
+		w.bufBytes = 0
+	}
+	return nil
+}
+
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-
+	if w.buf != nil {
+		if err := w.buf.Flush(); err != nil {
+			return err
+		}
+	}
 	return w.file.Close()
 }
