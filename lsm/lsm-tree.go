@@ -3,14 +3,18 @@ package lsm
 import (
 	"encoding/binary"
 	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
 	"slices"
 	"sync"
 )
 
 type StorageEngine struct {
 	mu       sync.RWMutex
-	memTable *MemTable
 	sstf     []*SSTable
+	memTable *MemTable
 	wal      *WAL
 	config   *Config
 }
@@ -27,6 +31,12 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 		return nil, err
 	}
 
+	sstables, err := loadSSTables(config.DataDir)
+	if err != nil {
+		wal.Close()
+		return nil, err
+	}
+
 	memTable := &MemTable{
 		data: data,
 	}
@@ -34,6 +44,7 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 	return &StorageEngine{
 		wal:      wal,
 		memTable: memTable,
+		sstf:     sstables,
 		config:   config,
 	}, nil
 }
@@ -100,6 +111,7 @@ func (sc *StorageEngine) flush() error {
 	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
 		return err
 	}
+
 	old := sc.memTable
 	sc.memTable = &MemTable{
 		data: make(map[string]*Entry),
@@ -111,6 +123,16 @@ func (sc *StorageEngine) flush() error {
 		return err
 	}
 	path := file.Name()
+
+	keys := make([]string, 0, len(old.data))
+	for key := range old.data {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	for _, key := range keys {
+		entry := old.data[key]
 
 	for key, entry := range old.data {
 		buf := make([]byte, 9+len(key)+len(entry.value))
@@ -124,6 +146,8 @@ func (sc *StorageEngine) flush() error {
 		binary.BigEndian.PutUint32(buf[1:5], uint32(len(key)))
 		binary.BigEndian.PutUint32(buf[5:9], uint32(len(entry.value)))
 
+		copy(buf[9:], key)
+		copy(buf[9+len(key):], entry.value)
 		copy(buf[9:], []byte(key))
 		copy(buf[9+len(key):], []byte(entry.value))
 
@@ -152,4 +176,44 @@ func (sc *StorageEngine) flush() error {
 		file: path,
 	})
 	return nil
+}
+
+func loadSSTables(dir string) ([]*SSTable, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	var files []string
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		if strings.HasPrefix(entry.Name(), "lsm-sstable-") {
+			files = append(files, entry.Name())
+		}
+	}
+
+	slices.Sort(files)
+
+	sstables := make([]*SSTable, 0, len(files))
+
+	for _, name := range files {
+		sstables = append(sstables, &SSTable{
+			file: filepath.Join(dir, name),
+		})
+	}
+
+	return sstables, nil
+}
+
+func (sc *StorageEngine) Close() error {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	return sc.wal.Close()
 }
