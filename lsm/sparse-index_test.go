@@ -6,15 +6,15 @@ func TestSparseIndexOffset(t *testing.T) {
 	index := SparseIndex{
 		entries: []sparseIndexEntry{
 			{
-				key:   "alpha",
+				key:    "alpha",
 				offset: 0,
 			},
 			{
-				key:   "delta",
+				key:    "delta",
 				offset: 64,
 			},
 			{
-				key:   "kappa",
+				key:    "kappa",
 				offset: 128,
 			},
 		},
@@ -25,23 +25,23 @@ func TestSparseIndexOffset(t *testing.T) {
 		offset int64
 	}{
 		{
-			key:   "aardvark",
+			key:    "aardvark",
 			offset: 0,
 		},
 		{
-			key:   "alpha",
+			key:    "alpha",
 			offset: 0,
 		},
 		{
-			key:   "beta",
+			key:    "beta",
 			offset: 0,
 		},
 		{
-			key:   "delta",
+			key:    "delta",
 			offset: 64,
 		},
 		{
-			key:   "lambda",
+			key:    "lambda",
 			offset: 128,
 		},
 	}

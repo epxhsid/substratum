@@ -7,7 +7,6 @@ import (
 	"slices"
 	"sort"
 	"strings"
-	"slices"
 	"sync"
 )
 
@@ -29,6 +28,10 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 	if err != nil {
 		wal.Close()
 		return nil, err
+	}
+
+	if data == nil {
+		data = make(map[string]*Entry)
 	}
 
 	sstables, err := loadSSTables(config.DataDir)
@@ -122,6 +125,7 @@ func (sc *StorageEngine) flush() error {
 		sc.memTable = old
 		return err
 	}
+
 	path := file.Name()
 
 	keys := make([]string, 0, len(old.data))
@@ -134,7 +138,6 @@ func (sc *StorageEngine) flush() error {
 	for _, key := range keys {
 		entry := old.data[key]
 
-	for key, entry := range old.data {
 		buf := make([]byte, 9+len(key)+len(entry.value))
 
 		if entry.deleted {
@@ -148,8 +151,6 @@ func (sc *StorageEngine) flush() error {
 
 		copy(buf[9:], key)
 		copy(buf[9+len(key):], entry.value)
-		copy(buf[9:], []byte(key))
-		copy(buf[9+len(key):], []byte(entry.value))
 
 		if _, err := file.Write(buf); err != nil {
 			file.Close()
@@ -172,8 +173,14 @@ func (sc *StorageEngine) flush() error {
 		return err
 	}
 
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+
 	sc.sstf = append(sc.sstf, &SSTable{
-		file: path,
+		filePath: path,
+		file:     f,
 	})
 	return nil
 }
@@ -204,8 +211,14 @@ func loadSSTables(dir string) ([]*SSTable, error) {
 	sstables := make([]*SSTable, 0, len(files))
 
 	for _, name := range files {
+		path := filepath.Join(dir, name)
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
 		sstables = append(sstables, &SSTable{
-			file: filepath.Join(dir, name),
+			filePath: path,
+			file:     f,
 		})
 	}
 
@@ -215,5 +228,15 @@ func loadSSTables(dir string) ([]*SSTable, error) {
 func (sc *StorageEngine) Close() error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	return sc.wal.Close()
+	for _, s := range sc.sstf {
+		if s != nil && s.file != nil {
+			s.file.Close()
+			s.file = nil
+		}
+	}
+	if sc.wal != nil {
+		sc.wal.Flush()
+		return sc.wal.Close()
+	}
+	return nil
 }
