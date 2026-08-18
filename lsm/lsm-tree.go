@@ -12,8 +12,8 @@ import (
 
 type StorageEngine struct {
 	mu       sync.RWMutex
-	memTable *MemTable
 	sstf     []*SSTable
+	memTable *MemTable
 	wal      *WAL
 	config   *Config
 }
