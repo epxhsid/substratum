@@ -69,23 +69,23 @@ func NewStorageEngine(config Config) (*StorageEngine, error) {
 	}, nil
 }
 
-func (sc *StorageEngine) Get(key string) (string, bool) {
+func (sc *StorageEngine) Get(key string) (string, bool, error) {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 
 	entry, ok := sc.memTable.Get(key)
 	if ok {
 		if entry.deleted {
-			return "", false
+			return "", false, nil
 		}
 
-		return entry.value, true
+		return entry.value, true, nil
 	}
 
 	for _, s := range slices.Backward(sc.sstf) {
 		entry, ok, err := s.Get(key)
 		if err != nil {
-			continue
+			return "", false, err
 		}
 
 		if !ok {
@@ -93,13 +93,13 @@ func (sc *StorageEngine) Get(key string) (string, bool) {
 		}
 
 		if entry.deleted {
-			return "", false
+			return "", false, nil
 		}
 
-		return entry.value, true
+		return entry.value, true, nil
 	}
 
-	return "", false
+	return "", false, nil
 }
 
 func (sc *StorageEngine) Set(key, value string) error {
@@ -307,6 +307,18 @@ func (sc *StorageEngine) Close() error {
 
 	if sc.wal == nil {
 		return nil
+	}
+
+	var firstErr error
+
+	for _, s := range sc.sstf {
+		if err := s.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if err := sc.wal.Close(); err != nil && firstErr == nil {
+		firstErr = err
 	}
 
 	err := sc.wal.Close()
