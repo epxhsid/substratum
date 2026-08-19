@@ -30,15 +30,15 @@ func (m *MemTable) Set(key, value string) {
 	m.size += 9 + len(key) + len(value)
 }
 
-func (m *MemTable) Get(key string) (string, bool) {
+func (m *MemTable) Get(key string) (*Entry, bool) {
 	if m.data == nil {
-		return "", false
+		return nil, false
 	}
 	entry, ok := m.data[key]
 	if !ok || entry.deleted {
-		return "", false
+		return nil, false
 	}
-	return entry.value, true
+	return entry, true
 }
 
 func (m *MemTable) Delete(key string) {
