@@ -1,7 +1,6 @@
 package lsm
 
 import (
-	"encoding/binary"
 	"io"
 	"os"
 	"sort"
@@ -9,24 +8,32 @@ import (
 )
 
 type sparseIndexEntry struct {
-	key    string
-	offset int64
+	key  string
+	ofst int64
 }
 
 type SparseIndex struct {
-	mu      sync.Mutex
+	rw      sync.RWMutex
 	entries []sparseIndexEntry
 	built   bool
 	err     error
 }
 
-func (si *SparseIndex) load(file *os.File) error {
-	si.mu.Lock()
-	defer si.mu.Unlock()
+func (si *SparseIndex) load(path string) error {
+	si.rw.Lock()
+	defer si.rw.Unlock()
 
 	if si.built {
 		return si.err
 	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		si.err = err
+		si.built = true
+		return err
+	}
+	defer file.Close()
 
 	entries, err := buildSparseIndex(file, sparseIndexInterval)
 	if err != nil {
@@ -35,76 +42,71 @@ func (si *SparseIndex) load(file *os.File) error {
 		return err
 	}
 
-	si.entries = entries.entries
+	si.entries = entries
 	si.err = nil
 	si.built = true
+
 	return nil
 }
 
 func (si *SparseIndex) offset(key string) int64 {
+	si.rw.RLock()
+	defer si.rw.RUnlock()
+
 	if len(si.entries) == 0 {
 		return 0
 	}
 
-	idx := sort.Search(len(si.entries), func(i int) bool {
-		return si.entries[i].key > key
-	})
+	idx := sort.Search(
+		len(si.entries),
+		func(i int) bool {
+			return si.entries[i].key > key
+		},
+	)
 
 	if idx == 0 {
 		return 0
 	}
 
-	return si.entries[idx-1].offset
+	return si.entries[idx-1].ofst
 }
 
-func buildSparseIndex(file *os.File, interval int) (*SparseIndex, error) {
+func buildSparseIndex(file *os.File, interval int) ([]sparseIndexEntry, error) {
 	if interval < 1 {
 		interval = 1
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return &SparseIndex{}, err
+		return nil, err
 	}
 
-	index := SparseIndex{}
-	header := make([]byte, 9)
-	record := 0
+	var entries []sparseIndexEntry
+	recordNumber := 0
 
 	for {
-		offset, err := file.Seek(0, io.SeekCurrent)
+		ofst, err := file.Seek(0, io.SeekCurrent)
 		if err != nil {
-			return &SparseIndex{}, err
+			return nil, err
 		}
 
-		if _, err := io.ReadFull(file, header); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return &SparseIndex{}, err
+		rec, _, err := readRecord(file)
+
+		if err == io.EOF {
+			break
 		}
 
-		klen := binary.BigEndian.Uint32(header[1:5])
-		vlen := binary.BigEndian.Uint32(header[5:9])
-
-		keyBuf := make([]byte, klen)
-		valueBuf := make([]byte, vlen)
-
-		if _, err := io.ReadFull(file, keyBuf); err != nil {
-			return &SparseIndex{}, err
-		}
-		if _, err := io.ReadFull(file, valueBuf); err != nil {
-			return &SparseIndex{}, err
+		if err != nil {
+			return nil, err
 		}
 
-		if record%interval == 0 {
-			index.entries = append(index.entries, sparseIndexEntry{
-				key:    string(keyBuf),
-				offset: offset,
+		if recordNumber%interval == 0 {
+			entries = append(entries, sparseIndexEntry{
+				key:  rec.key,
+				ofst: ofst,
 			})
 		}
 
-		record++
+		recordNumber++
 	}
-
-	return &index, nil
+	return entries, nil
 }
