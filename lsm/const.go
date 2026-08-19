@@ -12,4 +12,9 @@ const (
 	maxKeySize    = 64 << 10
 	maxValueSize  = 64 << 20
 	maxRecordSize = maxKeySize + maxValueSize + 9
+
+	bloomVersion    = 0x01
+	bloomHeaderSize = 17
 )
+
+const ln2Sq = 0.4804530139182014 // math.Log(2) * math.Log(2)
