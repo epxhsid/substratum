@@ -309,6 +309,18 @@ func (sc *StorageEngine) Close() error {
 		return nil
 	}
 
+	var firstErr error
+
+	for _, s := range sc.sstf {
+		if err := s.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+
+	if err := sc.wal.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
 	err := sc.wal.Close()
 	sc.wal = nil
 
