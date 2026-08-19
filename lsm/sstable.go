@@ -23,37 +23,37 @@ func OpenSSTable(path string) (*SSTable, error) {
 	}, nil
 }
 
-func (s *SSTable) Get(key string) (*Entry, bool) {
+func (s *SSTable) Get(key string) (*Entry, bool, error) {
 	if err := s.si.load(s.filePath); err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	file, err := os.Open(s.filePath)
 	if err != nil {
-		return nil, false
+		return nil, false, err
 	}
 	defer file.Close()
 
 	offset := s.si.offset(key)
 
 	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return nil, false
+		return nil, false, err
 	}
 
 	for {
 		rec, _, err := readRecord(file)
 
 		if err == io.EOF {
-			return nil, false
+			return nil, false, nil
 		}
 
 		if err != nil {
-			return nil, false
+			return nil, false, err
 		}
 
 		if rec.key != key {
 			if rec.key > key {
-				return nil, false
+				return nil, false, nil
 			}
 
 			continue
@@ -63,15 +63,15 @@ func (s *SSTable) Get(key string) (*Entry, bool) {
 		case opSet:
 			return &Entry{
 				value: rec.value,
-			}, true
+			}, true, nil
 
 		case opDelete:
 			return &Entry{
 				deleted: true,
-			}, true
+			}, true, nil
 
 		default:
-			return nil, false
+			return nil, false, nil
 		}
 	}
 }
