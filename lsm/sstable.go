@@ -3,11 +3,14 @@ package lsm
 import (
 	"io"
 	"os"
+
+	b "github.com/epxhsid/substratum/bloom"
 )
 
 type SSTable struct {
 	filePath string
 	si       SparseIndex
+	bf       b.BloomFilter
 }
 
 func OpenSSTable(path string) (*SSTable, error) {
