@@ -36,9 +36,10 @@ func (m *MemTable) Get(key string) (*Entry, bool) {
 	}
 
 	entry, ok := m.data[key]
-	if !ok || entry.deleted {
+	if !ok {
 		return nil, false
 	}
+
 	return entry, true
 }
 
