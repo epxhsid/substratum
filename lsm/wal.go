@@ -2,24 +2,25 @@ package lsm
 
 import (
 	"bufio"
-	"encoding/binary"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 )
 
-
 type WAL struct {
 	file     *os.File
 	buf      *bufio.Writer
 	mu       sync.RWMutex
 	bufBytes int
+	path     string
 }
 
 func Open(path string) (*WAL, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return nil, err
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return nil, err
+		}
 	}
 
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
@@ -30,6 +31,7 @@ func Open(path string) (*WAL, error) {
 	return &WAL{
 		file: f,
 		buf:  bufio.NewWriter(f),
+		path: path,
 	}, nil
 }
 
@@ -45,15 +47,10 @@ func (w *WAL) append(op byte, key, value string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	kb := []byte(key)
-	vb := []byte(value)
-
-	buf := make([]byte, 9+len(kb)+len(vb))
-	buf[0] = op
-	binary.BigEndian.PutUint32(buf[1:5], uint32(len(kb)))
-	binary.BigEndian.PutUint32(buf[5:9], uint32(len(vb)))
-	copy(buf[9:], kb)
-	copy(buf[9+len(kb):], vb)
+	buf, err := writeRecord(op, key, value)
+	if err != nil {
+		return err
+	}
 
 	n, err := w.buf.Write(buf)
 	if err != nil {
@@ -62,13 +59,7 @@ func (w *WAL) append(op byte, key, value string) error {
 	w.bufBytes += n
 
 	if w.bufBytes >= walFlushThreshold {
-		if err := w.buf.Flush(); err != nil {
-			return err
-		}
-		if err := w.file.Sync(); err != nil {
-			return err
-		}
-		w.bufBytes = 0
+		return w.flushLocked()
 	}
 
 	return nil
@@ -78,113 +69,109 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if w.buf != nil {
-		if err := w.buf.Flush(); err != nil {
-			return nil, err
-		}
+	if err := w.buf.Flush(); err != nil {
+		return nil, err
 	}
-
-	data := make(map[string]*Entry)
 
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
 		return nil, err
 	}
 
-	hbuf := make([]byte, 9)
+	data := make(map[string]*Entry)
+
 	for {
 		ofst, err := w.file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return nil, err
 		}
 
-		if _, err := io.ReadFull(w.file, hbuf); err != nil {
-			if err == io.EOF {
-				break
+		rec, _, err := readRecord(w.file)
+		if err == io.EOF {
+			break
+		}
+
+		if err == io.ErrUnexpectedEOF {
+			if err := w.file.Truncate(ofst); err != nil {
+				return nil, err
 			}
-			if err == io.ErrUnexpectedEOF {
-				if err := w.file.Truncate(ofst); err != nil {
-					return nil, err
-				}
-				break
-			}
+			break
+		}
+
+		if err != nil {
 			return nil, err
 		}
 
-		op := hbuf[0]
-		klen := binary.BigEndian.Uint32(hbuf[1:5])
-		vlen := binary.BigEndian.Uint32(hbuf[5:9])
-
-		kdata := make([]byte, klen)
-		vdata := make([]byte, vlen)
-
-		if _, err := io.ReadFull(w.file, kdata); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				if err := w.file.Truncate(ofst); err != nil {
-					return nil, err
-				}
-				break
-			}
-			return nil, err
-		}
-
-		if _, err := io.ReadFull(w.file, vdata); err != nil {
-			if err == io.EOF || err == io.ErrUnexpectedEOF {
-				if err := w.file.Truncate(ofst); err != nil {
-					return nil, err
-				}
-				break
-			}
-			return nil, err
-		}
-
-		key := string(kdata)
-
-		switch op {
+		switch rec.op {
 		case opSet:
-			data[key] = &Entry{
-				value:   string(vdata),
-				deleted: false,
+			data[rec.key] = &Entry{
+				value: rec.value,
 			}
+
 		case opDelete:
-			data[key] = &Entry{
+			data[rec.key] = &Entry{
 				value:   "",
 				deleted: true,
 			}
-
-		default:
-			return nil, os.ErrInvalid
 		}
 	}
 
 	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
 		return nil, err
 	}
-
 	return data, nil
 }
 
 func (w *WAL) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.buf != nil {
-		if err := w.buf.Flush(); err != nil {
-			return err
-		}
-		if err := w.file.Sync(); err != nil {
-			return err
-		}
-		w.bufBytes = 0
+
+	return w.flushLocked()
+}
+
+func (w *WAL) flushLocked() error {
+	if w.bufBytes == 0 {
+		return nil
 	}
+
+	if err := w.buf.Flush(); err != nil {
+		return err
+	}
+
+	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
+	w.bufBytes = 0
 	return nil
 }
 
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.buf != nil {
-		if err := w.buf.Flush(); err != nil {
-			return err
-		}
+
+	if w.file != nil {
+		return nil
 	}
-	return w.file.Close()
+
+	var firstErr error
+
+	if err := w.buf.Flush(); err != nil {
+		firstErr = err
+	}
+
+	if err := w.file.Sync(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	if err := w.file.Close(); err != nil && firstErr == nil {
+		firstErr = err
+	}
+
+	w.file = nil
+	w.buf = nil
+
+	return firstErr
+}
+
+func (w *WAL) Path() string {
+	return w.path
 }
