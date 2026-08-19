@@ -1,11 +1,12 @@
 package lsm
 
 import (
-	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -18,8 +19,22 @@ type StorageEngine struct {
 	config   *Config
 }
 
-func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
-	wal, err := Open(path)
+func NewStorageEngine(config Config) (*StorageEngine, error) {
+	if config.DataDir == "" {
+		return nil, fmt.Errorf("data directory is empty")
+	}
+
+	if config.MemTableSizeThreshold <= 0 {
+		return nil, fmt.Errorf("memtable threshold must be positive")
+	}
+
+	if err := os.MkdirAll(config.DataDir, 0755); err != nil {
+		return nil, err
+	}
+
+	walPath := filepath.Join(config.DataDir, "wal")
+
+	wal, err := Open(walPath)
 	if err != nil {
 		return nil, err
 	}
@@ -30,8 +45,14 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 		return nil, err
 	}
 
-	if data == nil {
-		data = make(map[string]*Entry)
+	memTable := NewMemTable()
+
+	for key, entry := range data {
+		if entry.deleted {
+			memTable.Delete(key)
+		} else {
+			memTable.Set(key, entry.value)
+		}
 	}
 
 	sstables, err := loadSSTables(config.DataDir)
@@ -40,15 +61,11 @@ func NewStorageEngine(config *Config, path string) (*StorageEngine, error) {
 		return nil, err
 	}
 
-	memTable := &MemTable{
-		data: data,
-	}
-
 	return &StorageEngine{
-		wal:      wal,
-		memTable: memTable,
 		sstf:     sstables,
-		config:   config,
+		memTable: memTable,
+		wal:      wal,
+		config:   &config,
 	}, nil
 }
 
@@ -56,8 +73,13 @@ func (sc *StorageEngine) Get(key string) (string, bool) {
 	sc.mu.RLock()
 	defer sc.mu.RUnlock()
 
-	if value, ok := sc.memTable.Get(key); ok {
-		return value, true
+	entry, ok := sc.memTable.Get(key)
+	if ok {
+		if entry.deleted {
+			return "", false
+		}
+
+		return entry.value, true
 	}
 
 	for _, s := range slices.Backward(sc.sstf) {
@@ -85,11 +107,11 @@ func (sc *StorageEngine) Set(key, value string) error {
 	}
 
 	sc.memTable.Set(key, value)
-	if sc.memTable.Size() >= sc.config.MemTableSizeThreshold {
-		if err := sc.flush(); err != nil {
-			return err
-		}
+
+	if sc.memTable.size >= sc.config.MemTableSizeThreshold {
+		return sc.flush()
 	}
+
 	return nil
 }
 
@@ -102,26 +124,32 @@ func (sc *StorageEngine) Delete(key string) error {
 	}
 
 	sc.memTable.Delete(key)
-	if sc.memTable.Size() >= sc.config.MemTableSizeThreshold {
-		if err := sc.flush(); err != nil {
-			return err
-		}
+	if sc.memTable.size >= sc.config.MemTableSizeThreshold {
+		return sc.flush()
 	}
 	return nil
 }
 
 func (sc *StorageEngine) flush() error {
+	if sc.memTable.Length() == 0 {
+		return nil
+	}
+
 	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
 		return err
 	}
 	old := sc.memTable
-	file, err := os.CreateTemp(sc.config.DataDir, "lsm-sstable-*")
+	tmp, err := os.CreateTemp(sc.config.DataDir, ".sstable-*")
 	if err != nil {
-		sc.memTable = old
 		return err
 	}
 
-	path := file.Name()
+	tp := tmp.Name()
+
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tp)
+	}
 
 	keys := make([]string, 0, len(old.data))
 	for key := range old.data {
@@ -133,55 +161,93 @@ func (sc *StorageEngine) flush() error {
 	for _, key := range keys {
 		entry := old.data[key]
 
-		buf := make([]byte, 9+len(key)+len(entry.value))
+		op := opSet
+		value := entry.value
 
 		if entry.deleted {
-			buf[0] = opDelete
-		} else {
-			buf[0] = opSet
+			op = opDelete
+			value = ""
 		}
 
-		binary.BigEndian.PutUint32(buf[1:5], uint32(len(key)))
-		binary.BigEndian.PutUint32(buf[5:9], uint32(len(entry.value)))
-		copy(buf[9:], key)
-		copy(buf[9+len(key):], entry.value)
+		buf, err := writeRecord(op, key, value)
+		if err != nil {
+			cleanup()
+			return err
+		}
 
-		if _, err := file.Write(buf); err != nil {
-			file.Close()
-			os.Remove(path)
-			sc.memTable = old
+		if _, err := tmp.Write(buf); err != nil {
+			cleanup()
 			return err
 		}
 	}
 
-	if err := file.Sync(); err != nil {
-		file.Close()
-		os.Remove(path)
-		sc.memTable = old
+	if err := tmp.Sync(); err != nil {
+		cleanup()
 		return err
 	}
 
-	if err := file.Close(); err != nil {
-		os.Remove(path)
-		sc.memTable = old
+	if err := tmp.Close(); err != nil {
+		os.Remove(tp)
 		return err
 	}
 
-	f, err := os.Open(path)
+	ff, err := sc.nextSSTablePath()
 	if err != nil {
+		os.Remove(tp)
+	}
+
+	if err := os.Rename(tp, ff); err != nil {
+		os.Remove(tp)
 		return err
 	}
 
-	sstable := &SSTable{
-		filePath: path,
-		file:     f,
+	sstable, err := OpenSSTable(ff)
+	if err != nil {
+		os.Remove(ff)
+		return err
 	}
-	sc.sstf = append(sc.sstf, sstable)
 
-	sc.memTable = &MemTable{
-		data: make(map[string]*Entry),
-	}
+	sc.sstf = append(sc.sstf, sstable)
+	sc.memTable = NewMemTable()
+
 	return nil
+}
+
+func (sc *StorageEngine) nextSSTablePath() (string, error) {
+	entries, err := os.ReadDir(sc.config.DataDir)
+	if err != nil {
+		return "", err
+	}
+
+	maxID := 0
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+
+		name := entry.Name()
+
+		if !strings.HasPrefix(name, "sstable-") {
+			continue
+		}
+
+		idString := strings.TrimPrefix(name, "sstable-")
+
+		id, err := strconv.Atoi(idString)
+		if err != nil {
+			continue
+		}
+
+		if id > maxID {
+			maxID = id
+		}
+	}
+
+	return filepath.Join(
+		sc.config.DataDir,
+		fmt.Sprintf("sstable-%020d", maxID+1),
+	), nil
 }
 
 func loadSSTables(dir string) ([]*SSTable, error) {
@@ -190,35 +256,35 @@ func loadSSTables(dir string) ([]*SSTable, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
+
 		return nil, err
 	}
 
-	var files []string
+	var names []string
 
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 
-		if strings.HasPrefix(entry.Name(), "lsm-sstable-") {
-			files = append(files, entry.Name())
+		if strings.HasPrefix(entry.Name(), "sstable-") {
+			names = append(names, entry.Name())
 		}
 	}
 
-	slices.Sort(files)
+	sort.Strings(names)
 
-	sstables := make([]*SSTable, 0, len(files))
+	sstables := make([]*SSTable, 0, len(names))
 
-	for _, name := range files {
+	for _, name := range names {
 		path := filepath.Join(dir, name)
-		f, err := os.Open(path)
+
+		sstable, err := OpenSSTable(path)
 		if err != nil {
-			continue
+			return nil, err
 		}
-		sstables = append(sstables, &SSTable{
-			filePath: path,
-			file:     f,
-		})
+
+		sstables = append(sstables, sstable)
 	}
 
 	return sstables, nil
@@ -227,15 +293,10 @@ func loadSSTables(dir string) ([]*SSTable, error) {
 func (sc *StorageEngine) Close() error {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	for _, s := range sc.sstf {
-		if s != nil && s.file != nil {
-			s.file.Close()
-			s.file = nil
-		}
+
+	if sc.wal == nil {
+		return nil
 	}
-	if sc.wal != nil {
-		sc.wal.Flush()
-		return sc.wal.Close()
-	}
-	return nil
+
+	return sc.wal.Close()
 }
