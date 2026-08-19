@@ -8,6 +8,7 @@ import (
 	"sync"
 )
 
+
 type WAL struct {
 	file     *os.File
 	buf      *bufio.Writer
@@ -147,6 +148,17 @@ func (w *WAL) flushLocked() error {
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.buf != nil {
+		if err := w.buf.Flush(); err != nil {
+			return err
+		}
+		if err := w.file.Sync(); err != nil {
+			return err
+		}
+		w.bufBytes = 0
+	}
+	return nil
+}
 
 	if w.file != nil {
 		return nil

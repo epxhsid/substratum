@@ -13,3 +13,5 @@ const (
 	maxValueSize  = 64 << 20
 	maxRecordSize = maxKeySize + maxValueSize + 9
 )
+
+const walFlushThreshold = 4096
