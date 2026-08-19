@@ -1,20 +1,16 @@
 package lsm
 
 import (
-	"bufio"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 )
 
-
 type WAL struct {
-	file     *os.File
-	buf      *bufio.Writer
-	mu       sync.RWMutex
-	bufBytes int
-	path     string
+	file *os.File
+	mu   sync.Mutex
+	path string
 }
 
 func Open(path string) (*WAL, error) {
@@ -24,14 +20,17 @@ func Open(path string) (*WAL, error) {
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0644)
+	file, err := os.OpenFile(
+		path,
+		os.O_CREATE|os.O_RDWR|os.O_APPEND,
+		0644,
+	)
 	if err != nil {
 		return nil, err
 	}
 
 	return &WAL{
-		file: f,
-		buf:  bufio.NewWriter(f),
+		file: file,
 		path: path,
 	}, nil
 }
@@ -48,30 +47,28 @@ func (w *WAL) append(op byte, key, value string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	if w.file == nil {
+		return os.ErrClosed
+	}
+
 	buf, err := writeRecord(op, key, value)
 	if err != nil {
 		return err
 	}
 
-	n, err := w.buf.Write(buf)
-	if err != nil {
+	if _, err := w.file.Write(buf); err != nil {
 		return err
 	}
-	w.bufBytes += n
 
-	if w.bufBytes >= walFlushThreshold {
-		return w.flushLocked()
-	}
-
-	return nil
+	return w.file.Sync()
 }
 
 func (w *WAL) Recover() (map[string]*Entry, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	if err := w.buf.Flush(); err != nil {
-		return nil, err
+	if w.file == nil {
+		return nil, os.ErrClosed
 	}
 
 	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
@@ -81,18 +78,19 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 	data := make(map[string]*Entry)
 
 	for {
-		ofst, err := w.file.Seek(0, io.SeekCurrent)
+		offset, err := w.file.Seek(0, io.SeekCurrent)
 		if err != nil {
 			return nil, err
 		}
 
 		rec, _, err := readRecord(w.file)
+
 		if err == io.EOF {
 			break
 		}
 
 		if err == io.ErrUnexpectedEOF {
-			if err := w.file.Truncate(ofst); err != nil {
+			if err := w.file.Truncate(offset); err != nil {
 				return nil, err
 			}
 			break
@@ -110,7 +108,6 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 
 		case opDelete:
 			data[rec.key] = &Entry{
-				value:   "",
 				deleted: true,
 			}
 		}
@@ -119,58 +116,52 @@ func (w *WAL) Recover() (map[string]*Entry, error) {
 	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
 		return nil, err
 	}
+
 	return data, nil
+}
+
+func (w *WAL) Reset() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.file == nil {
+		return os.ErrClosed
+	}
+
+	if err := w.file.Sync(); err != nil {
+		return err
+	}
+
+	if err := w.file.Truncate(0); err != nil {
+		return err
+	}
+
+	_, err := w.file.Seek(0, io.SeekEnd)
+	return err
 }
 
 func (w *WAL) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	return w.flushLocked()
-}
-
-func (w *WAL) flushLocked() error {
-	if w.bufBytes == 0 {
-		return nil
+	if w.file == nil {
+		return os.ErrClosed
 	}
 
-	if err := w.buf.Flush(); err != nil {
-		return err
-	}
-
-	if _, err := w.file.Seek(0, io.SeekEnd); err != nil {
-		return err
-	}
-	w.bufBytes = 0
-	return nil
+	return w.file.Sync()
 }
 
 func (w *WAL) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.buf != nil {
-		if err := w.buf.Flush(); err != nil {
-			return err
-		}
-		if err := w.file.Sync(); err != nil {
-			return err
-		}
-		w.bufBytes = 0
-	}
-	return nil
-}
 
-	if w.file != nil {
+	if w.file == nil {
 		return nil
 	}
 
 	var firstErr error
 
-	if err := w.buf.Flush(); err != nil {
-		firstErr = err
-	}
-
-	if err := w.file.Sync(); err != nil && firstErr == nil {
+	if err := w.file.Sync(); err != nil {
 		firstErr = err
 	}
 
@@ -179,7 +170,6 @@ func (w *WAL) Close() error {
 	}
 
 	w.file = nil
-	w.buf = nil
 
 	return firstErr
 }

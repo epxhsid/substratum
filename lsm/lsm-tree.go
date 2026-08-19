@@ -83,7 +83,11 @@ func (sc *StorageEngine) Get(key string) (string, bool) {
 	}
 
 	for _, s := range slices.Backward(sc.sstf) {
-		entry, ok := s.Get(key)
+		entry, ok, err := s.Get(key)
+		if err != nil {
+			continue
+		}
+
 		if !ok {
 			continue
 		}
@@ -135,10 +139,11 @@ func (sc *StorageEngine) flush() error {
 		return nil
 	}
 
+	old := sc.memTable
 	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
 		return err
 	}
-	old := sc.memTable
+
 	tmp, err := os.CreateTemp(sc.config.DataDir, ".sstable-*")
 	if err != nil {
 		return err
@@ -191,25 +196,31 @@ func (sc *StorageEngine) flush() error {
 		return err
 	}
 
-	ff, err := sc.nextSSTablePath()
+	fp, err := sc.nextSSTablePath()
 	if err != nil {
-		os.Remove(tp)
-	}
-
-	if err := os.Rename(tp, ff); err != nil {
 		os.Remove(tp)
 		return err
 	}
 
-	sstable, err := OpenSSTable(ff)
+	if err := os.Rename(tp, fp); err != nil {
+		os.Remove(tp)
+		return err
+	}
+
+	sstable, err := OpenSSTable(fp)
 	if err != nil {
-		os.Remove(ff)
+		os.Remove(fp)
+		return err
+	}
+
+	if err := sc.wal.Reset(); err != nil {
+		sstable.Close()
+		os.Remove(fp)
 		return err
 	}
 
 	sc.sstf = append(sc.sstf, sstable)
 	sc.memTable = NewMemTable()
-
 	return nil
 }
 
@@ -298,5 +309,8 @@ func (sc *StorageEngine) Close() error {
 		return nil
 	}
 
-	return sc.wal.Close()
+	err := sc.wal.Close()
+	sc.wal = nil
+
+	return err
 }
