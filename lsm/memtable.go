@@ -10,45 +10,40 @@ type Entry struct {
 	deleted bool
 }
 
-func (m *MemTable) ensureInit() {
-	if m.data == nil {
-		m.data = make(map[string]*Entry)
+func NewMemTable() *MemTable {
+	return &MemTable{
+		data: make(map[string]*Entry),
 	}
 }
 
 func (m *MemTable) Set(key, value string) {
 	m.ensureInit()
-
-	old, exists := m.data[key]
-	if exists {
+	if old, exists := m.data[key]; exists {
 		m.size -= 9 + len(key) + len(old.value)
 	}
 
 	entry := &Entry{
-		value:   value,
-		deleted: false,
+		value: value,
 	}
 
 	m.data[key] = entry
 	m.size += 9 + len(key) + len(value)
 }
 
-func (m *MemTable) Get(key string) (string, bool) {
+func (m *MemTable) Get(key string) (*Entry, bool) {
 	if m.data == nil {
-		return "", false
+		return nil, false
 	}
 	entry, ok := m.data[key]
 	if !ok || entry.deleted {
-		return "", false
+		return nil, false
 	}
-	return entry.value, true
+	return entry, true
 }
 
 func (m *MemTable) Delete(key string) {
 	m.ensureInit()
-
-	old, exists := m.data[key]
-	if exists {
+	if old, exists := m.data[key]; exists {
 		m.size -= 9 + len(key) + len(old.value)
 	}
 
@@ -57,12 +52,19 @@ func (m *MemTable) Delete(key string) {
 	}
 
 	m.data[key] = entry
-	m.size += 9 + len(key)
+	m.size += 9 + len(key) + len(entry.value)
 }
 
 func (m *MemTable) Size() int {
-	if m.data == nil {
-		return 0
-	}
+	return m.size
+}
+
+func (m *MemTable) Length() int {
 	return len(m.data)
+}
+
+func (m *MemTable) ensureInit() {
+	if m.data == nil {
+		m.data = make(map[string]*Entry)
+	}
 }

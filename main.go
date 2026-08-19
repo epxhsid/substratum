@@ -15,7 +15,7 @@ func main() {
 		MemTableSizeThreshold: 3,
 	}
 
-	db, err := lsm.NewStorageEngine(config, "./data/wal")
+	db, err := lsm.NewStorageEngine(*config)
 	if err != nil {
 		panic(err)
 	}
