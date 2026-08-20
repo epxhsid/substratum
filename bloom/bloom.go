@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: MIT
 // package bloom provides a Bloom filter implementation.
-
 package bloom
 
 import (
 	"fmt"
 	"math"
+
+	"github.com/spaolacci/murmur3"
 )
 
 type BloomFilter struct {
@@ -45,4 +46,53 @@ func NewBloomFilter(ek int, fpr float64) (*BloomFilter, error) {
 		bitset: make([]byte, (m+7)/8),
 		k:      k,
 	}, nil
+}
+
+// Kirsch-Mitzenmacher optimization: derive k bit positions from two
+// Murmur3 hashes rather than computing k separate hashes.
+//
+// formula: g_i(x) = (h1(x) + i*h2(x)) mod m
+//
+// m is the number of bits in the filter and i ∈ [0, k).
+// h1 and h2 are independent hash functions for the purposes of the
+// Bloom filter. h2 uses a fixed Murmur3 seed (2538058380).
+func (bf *BloomFilter) Add(key string) {
+	if bf == nil || len(bf.bitset) == 0 {
+		return
+	}
+
+	h1 := murmur3.Sum64([]byte(key))
+	h2 := murmur3.Sum64WithSeed([]byte(key), 0x9747b28c)
+
+	bc := uint64(len(bf.bitset) * 8)
+
+	for i := uint32(0); i < bf.k; i++ {
+		hash := h1 + uint64(i)*h2
+		bit := hash % bc
+
+		bf.bitset[bit/8] |= 1 << (bit % 8)
+	}
+}
+
+// Contains returns true if the key is likely to be in the filter, false otherwise.
+func (bf *BloomFilter) Contains(key string) bool {
+	if bf == nil || len(bf.bitset) == 0 {
+		return false
+	}
+
+	h1 := murmur3.Sum64([]byte(key))
+	h2 := murmur3.Sum64WithSeed([]byte(key), 0x9747b28c)
+
+	bc := uint64(len(bf.bitset) * 8)
+
+	for i := uint32(0); i < bf.k; i++ {
+		hash := h1 + uint64(i)*h2
+		bit := hash % bc
+
+		if bf.bitset[bit/8]&(1<<(bit%8)) == 0 {
+			return false
+		}
+	}
+
+	return true
 }
