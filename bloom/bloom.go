@@ -3,6 +3,8 @@
 package bloom
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 
@@ -14,6 +16,8 @@ type BloomFilter struct {
 	k      uint32
 }
 
+// NewBloomFilter creates a Bloom filter sized for approximately ek (estimated key) elements
+// with a target false-positive rate of fpr (false positive rate)
 func NewBloomFilter(ek int, fpr float64) (*BloomFilter, error) {
 	if ek <= 0 {
 		return nil, fmt.Errorf("not positive")
@@ -55,7 +59,7 @@ func NewBloomFilter(ek int, fpr float64) (*BloomFilter, error) {
 //
 // m is the number of bits in the filter and i ∈ [0, k).
 // h1 and h2 are independent hash functions for the purposes of the
-// Bloom filter. h2 uses a fixed Murmur3 seed (2538058380).
+// Bloom filter. h2 uses a fixed Murmur3 seed.
 func (bf *BloomFilter) Add(key string) {
 	if bf == nil || len(bf.bitset) == 0 {
 		return
@@ -95,4 +99,72 @@ func (bf *BloomFilter) Contains(key string) bool {
 	}
 
 	return true
+}
+
+// serializes the BloomFilter into a byte slice/binary representation.
+// the serialized format is: [magic][version][k][bitset]
+// all integer fields are serialized in big-endian order.
+// the bitset contains the filter's raw bit vector.
+func (bf *BloomFilter) Marshal() ([]byte, error) {
+	if bf == nil {
+		return nil, errors.New("lsm: nil bloom filter")
+	}
+
+	if len(bf.bitset) == 0 {
+		return nil, errors.New("lsm: empty bloom filter")
+	}
+
+	if bf.k == 0 {
+		return nil, errors.New("lsm: invalid bloom filter hash count")
+	}
+
+	buf := make([]byte, 12+len(bf.bitset))
+
+	binary.BigEndian.PutUint32(buf[0:4], bloomMagic)
+	binary.BigEndian.PutUint32(buf[4:8], bloomVersion)
+	binary.BigEndian.PutUint32(buf[8:12], bf.k)
+
+	copy(buf[12:], bf.bitset)
+
+	return buf, nil
+}
+
+// deserializes the BloomFilter from a byte slice/binary representation.
+func (bf *BloomFilter) Unmarshal(data []byte) error {
+	if bf == nil {
+		return errors.New("lsm: nil bloom filter")
+	}
+
+	if len(data) < 12 {
+		return errors.New("lsm: invalid bloom filter data")
+	}
+
+	magic := binary.BigEndian.Uint32(data[0:4])
+	if magic != bloomMagic {
+		return errors.New("lsm: invalid bloom filter magic")
+	}
+
+	version := binary.BigEndian.Uint32(data[4:8])
+	if version != bloomVersion {
+		return fmt.Errorf(
+			"lsm: unsupported bloom filter version: %d",
+			version,
+		)
+	}
+
+	k := binary.BigEndian.Uint32(data[8:12])
+	if k == 0 {
+		return errors.New("lsm: invalid bloom filter hash count")
+	}
+
+	bitset := data[12:]
+	if len(bitset) == 0 {
+		return errors.New("lsm: empty bloom filter")
+	}
+
+	bf.k = k
+	bf.bitset = make([]byte, len(bitset))
+	copy(bf.bitset, bitset)
+
+	return nil
 }
