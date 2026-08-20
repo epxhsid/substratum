@@ -16,5 +16,3 @@ const (
 	bloomVersion    = 0x01
 	bloomHeaderSize = 17
 )
-
-const ln2Sq = 0.4804530139182014 // math.Log(2) * math.Log(2)

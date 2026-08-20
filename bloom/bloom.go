@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// package bloom provides a Bloom filter implementation.
+
 package bloom
 
 import (
@@ -26,7 +29,7 @@ func NewBloomFilter(ek int, fpr float64) (*BloomFilter, error) {
 	// when decreasing the fpr (e.g. from 0.1 to 0.01), math.Log(fpr) becomes
 	// a larger negative natural log, which correctly scales up to a larger m,
 	// to allocate more memory thus reducing the false positive rate
-	m := int(-(float64(ek) * math.Log(fpr)) / ln2Sq)
+	m := int(math.Ceil(-(float64(ek) * math.Log(fpr)) / ln2Sq))
 
 	// function for calculating the number of hash functions (k): "k = (m / n) * ln(2)"
 	// Calculates the optimal number of hash functions (k) for a Bloom filter given the
@@ -36,7 +39,7 @@ func NewBloomFilter(ek int, fpr float64) (*BloomFilter, error) {
 	// finds the optimal number of hash functions to minimize the false positive
 	// rate. minimum value of 1 is placed for k, to avoid division by zero and
 	// ensure at least one hash function is always used for hashing/filtering
-	k := max(uint32((float64(m)/float64(ek))*math.Log(2)), 1)
+	k := max(1, uint32(math.Round((float64(m)/float64(ek))*math.Log(2))))
 
 	return &BloomFilter{
 		bitset: make([]byte, (m+7)/8),
