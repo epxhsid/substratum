@@ -141,7 +141,21 @@ func (sc *StorageEngine) flush() error {
 	}
 
 	old := sc.memTable
+
 	if err := os.MkdirAll(sc.config.DataDir, 0755); err != nil {
+		return err
+	}
+
+	keys := make([]string, 0, len(old.data))
+
+	for key := range old.data {
+		keys = append(keys, key)
+	}
+
+	sort.Strings(keys)
+
+	bf, err := NewBloomFilter(len(keys), 0.01)
+	if err != nil {
 		return err
 	}
 
@@ -150,22 +164,16 @@ func (sc *StorageEngine) flush() error {
 		return err
 	}
 
-	tp := tmp.Name()
+	tmpPath := tmp.Name()
 
 	cleanup := func() {
 		tmp.Close()
-		os.Remove(tp)
+		os.Remove(tmpPath)
 	}
-
-	keys := make([]string, 0, len(old.data))
-	for key := range old.data {
-		keys = append(keys, key)
-	}
-
-	sort.Strings(keys)
 
 	for _, key := range keys {
 		entry := old.data[key]
+		bf.Add(key)
 
 		op := opSet
 		value := entry.value
@@ -193,35 +201,45 @@ func (sc *StorageEngine) flush() error {
 	}
 
 	if err := tmp.Close(); err != nil {
-		os.Remove(tp)
+		os.Remove(tmpPath)
 		return err
 	}
 
-	fp, err := sc.nextSSTablePath()
+	sstablePath, err := sc.nextSSTablePath()
 	if err != nil {
-		os.Remove(tp)
+		os.Remove(tmpPath)
 		return err
 	}
 
-	if err := os.Rename(tp, fp); err != nil {
-		os.Remove(tp)
+	if err := os.Rename(tmpPath, sstablePath); err != nil {
+		os.Remove(tmpPath)
 		return err
 	}
 
-	sstable, err := OpenSSTable(fp)
+	bloomPath := sstablePath + ".bloom"
+
+	if err := writeBloomFilter(bloomPath, bf); err != nil {
+		os.Remove(sstablePath)
+		return err
+	}
+
+	sstable, err := OpenSSTable(sstablePath)
 	if err != nil {
-		os.Remove(fp)
+		os.Remove(sstablePath)
+		os.Remove(bloomPath)
 		return err
 	}
 
 	if err := sc.wal.Reset(); err != nil {
 		sstable.Close()
-		os.Remove(fp)
+		os.Remove(sstablePath)
+		os.Remove(bloomPath)
 		return err
 	}
 
 	sc.sstf = append(sc.sstf, sstable)
 	sc.memTable = NewMemTable()
+
 	return nil
 }
 
