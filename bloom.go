@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MIT
-// package bloom provides a Bloom filter implementation.
-package bloom
+package lsm
 
 import (
 	"encoding/binary"

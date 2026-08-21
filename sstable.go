@@ -1,16 +1,17 @@
+// SPDX-License-Identifier: MIT
 package lsm
 
 import (
+	"fmt"
 	"io"
 	"os"
-
-	b "github.com/epxhsid/substratum/bloom"
+	"path/filepath"
 )
 
 type SSTable struct {
 	filePath string
 	si       SparseIndex
-	bf       b.BloomFilter
+	bf       *BloomFilter
 }
 
 func OpenSSTable(path string) (*SSTable, error) {
@@ -18,15 +19,30 @@ func OpenSSTable(path string) (*SSTable, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	file.Close()
+
+	bloomPath := path + ".bloom"
+	data, err := os.ReadFile(bloomPath)
+	if err != nil {
+		return nil, err
+	}
+
+	bf := BloomFilter{}
+	if err := bf.Unmarshal(data); err != nil {
+		return nil, err
+	}
 
 	return &SSTable{
 		filePath: path,
+		bf:       &bf,
 	}, nil
 }
 
 func (s *SSTable) Get(key string) (*Entry, bool, error) {
+	if !s.bf.Contains(key) {
+		return nil, false, nil
+	}
+
 	if err := s.si.load(s.filePath); err != nil {
 		return nil, false, err
 	}
@@ -74,11 +90,54 @@ func (s *SSTable) Get(key string) (*Entry, bool, error) {
 			}, true, nil
 
 		default:
-			return nil, false, nil
+			return nil, false, fmt.Errorf("lsm: invalid operation %d", rec.op)
 		}
 	}
 }
 
 func (s *SSTable) Close() error {
+	return nil
+}
+
+func writeBloomFilter(path string, bf *BloomFilter) error {
+	data, err := bf.Marshal()
+	if err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(path)
+
+	tmp, err := os.CreateTemp(dir, ".bloom-*")
+	if err != nil {
+		return err
+	}
+
+	tmpPath := tmp.Name()
+
+	cleanup := func() {
+		tmp.Close()
+		os.Remove(tmpPath)
+	}
+
+	if _, err := tmp.Write(data); err != nil {
+		cleanup()
+		return err
+	}
+
+	if err := tmp.Sync(); err != nil {
+		cleanup()
+		return err
+	}
+
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return err
+	}
+
 	return nil
 }
